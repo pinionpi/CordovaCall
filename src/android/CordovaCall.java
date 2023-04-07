@@ -5,7 +5,11 @@ import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginResult;
+
+import android.os.Build;
 import android.os.Bundle;
+import android.os.UserHandle;
+import androidx.annotation.RequiresApi;
 import android.telecom.DisconnectCause;
 import android.telecom.PhoneAccount;
 import android.telecom.PhoneAccountHandle;
@@ -26,6 +30,8 @@ import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.util.Log;
 
+import com.eunite.atwork.R;
+
 public class CordovaCall extends CordovaPlugin {
 
     private static String TAG = "CordovaCall";
@@ -36,10 +42,13 @@ public class CordovaCall extends CordovaPlugin {
     private TelecomManager tm;
     private PhoneAccountHandle handle;
     private PhoneAccount phoneAccount;
+    private UserHandle userHandle;
     private CallbackContext callbackContext;
     private String appName;
     private String from;
+    private String fromId;
     private String to;
+    private String toId;
     private String realCallTo;
     private static HashMap<String, ArrayList<CallbackContext>> callbackContextMap = new HashMap<String, ArrayList<CallbackContext>>();
     private static CordovaInterface cordovaInterface;
@@ -57,38 +66,66 @@ public class CordovaCall extends CordovaPlugin {
         return icon;
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     @Override
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
+        Log.d(TAG, "registerEvent: initialize ...");
         cordovaInterface = cordova;
         super.initialize(cordova, webView);
-        appName = getApplicationName(this.cordova.getActivity().getApplicationContext());
-        handle = new PhoneAccountHandle(new ComponentName(this.cordova.getActivity().getApplicationContext(),MyConnectionService.class),appName);
-        tm = (TelecomManager)this.cordova.getActivity().getApplicationContext().getSystemService(this.cordova.getActivity().getApplicationContext().TELECOM_SERVICE);
+        Context context = this.cordova.getActivity().getApplicationContext();
+        appName = getApplicationName(context);
+        handle = new PhoneAccountHandle(new ComponentName(context, MyConnectionService.class), appName);
+        // TODO PhoneAccountHandle with UserHandle
+        //userHandle = new UserHandle(context);
+        //handle = new PhoneAccountHandle(new ComponentName(context, MyConnectionService.class), appName, userHandle);
+        tm = (TelecomManager) context.getSystemService(Context.TELECOM_SERVICE);
+        /*
+        2020-07-04 Disable registerPhoneAccount in Android (comment code block)
+        */
+        // <preference name="StatusBarBackgroundColor" value="#0D47A1" />
         if(android.os.Build.VERSION.SDK_INT >= 26) {
-          phoneAccount = new PhoneAccount.Builder(handle, appName)
+            //Bundle extras = new Bundle();
+            //extras.putBoolean(PhoneAccount.EXTRA_LOG_SELF_MANAGED_CALLS, false);
+            phoneAccount = new PhoneAccount.Builder(handle, appName)
                   .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
+                  //.setIcon(Icon.createWithResource(context, R.drawable.ic_stat_name)) // where to take effect?
+                  //.setHighlightColor(0xff8000e0) // where to take effect?
+                  //.addSupportedUriScheme("sip") // try scheme "eunite", "atwork", "uden"?
+                  //.setExtras(extras)
                   .build();
           tm.registerPhoneAccount(phoneAccount);
         }
-        if(android.os.Build.VERSION.SDK_INT >= 23) {
-          phoneAccount = new PhoneAccount.Builder(handle, appName)
-                   .setCapabilities(PhoneAccount.CAPABILITY_CALL_PROVIDER)
+        /*
+        // 2023-01-19 Fix Error Android 13 API 33 K.Mod
+        // 2023-01-30 Fix Error Android ALL by KM
+        if(android.os.Build.VERSION.SDK_INT >= 23 && android.os.Build.VERSION.SDK_INT <= 32) {
+            Bundle extras = new Bundle();
+            extras.putBoolean(PhoneAccount.EXTRA_LOG_SELF_MANAGED_CALLS, false);
+            phoneAccount = new PhoneAccount.Builder(handle, appName)
+                   .setCapabilities(PhoneAccount.CAPABILITY_CALL_SUBJECT)
+                   .setIcon(Icon.createWithResource(context, R.drawable.ic_stat_name))
+                   .setHighlightColor(0x000D47A1) // notification center, native call session ui
                    .build();
-          tm.registerPhoneAccount(phoneAccount);          
+            extras.putBoolean(PhoneAccount.EXTRA_LOG_SELF_MANAGED_CALLS, false);
+            tm.registerPhoneAccount(phoneAccount);
         }
+         */
         callbackContextMap.put("answer",new ArrayList<CallbackContext>());
         callbackContextMap.put("reject",new ArrayList<CallbackContext>());
         callbackContextMap.put("hangup",new ArrayList<CallbackContext>());
         callbackContextMap.put("sendCall",new ArrayList<CallbackContext>());
         callbackContextMap.put("receiveCall",new ArrayList<CallbackContext>());
+        Log.d(TAG, "registerEvent: initialize END. callbackContextMap=" + callbackContextMap);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     @Override
     public void onResume(boolean multitasking) {
         super.onResume(multitasking);
         this.checkCallPermission();
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
         this.callbackContext = callbackContext;
@@ -102,6 +139,7 @@ public class CordovaCall extends CordovaPlugin {
                 }
             } else {
                 from = args.getString(0);
+                fromId = args.getString(1);
                 permissionCounter = 2;
                 pendingAction = "receiveCall";
                 this.checkCallPermission();
@@ -119,6 +157,7 @@ public class CordovaCall extends CordovaPlugin {
                 }
             } else {
                 to = args.getString(0);
+                toId = args.getString(1);
                 permissionCounter = 2;
                 pendingAction = "sendCall";
                 this.checkCallPermission();
@@ -168,6 +207,7 @@ public class CordovaCall extends CordovaPlugin {
         } else if (action.equals("registerEvent")) {
             String eventType = args.getString(0);
             ArrayList<CallbackContext> callbackContextList = callbackContextMap.get(eventType);
+            Log.d(TAG, "registerEvent: eventType=" + eventType + ", callbackContextList=" + callbackContextList);
             callbackContextList.add(this.callbackContext);
             return true;
         } else if (action.equals("setAppName")) {
@@ -181,7 +221,7 @@ public class CordovaCall extends CordovaPlugin {
             }
             if(android.os.Build.VERSION.SDK_INT >= 23) {
               phoneAccount = new PhoneAccount.Builder(handle, appName)
-                   .setCapabilities(PhoneAccount.CAPABILITY_CALL_PROVIDER)
+                   .setCapabilities(PhoneAccount.CAPABILITY_CALL_SUBJECT)
                    .build();
               tm.registerPhoneAccount(phoneAccount);
             }
@@ -230,6 +270,7 @@ public class CordovaCall extends CordovaPlugin {
         return false;
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     private void checkCallPermission() {
         if(permissionCounter >= 1) {
             PhoneAccount currentPhoneAccount = tm.getPhoneAccount(handle);
@@ -252,14 +293,19 @@ public class CordovaCall extends CordovaPlugin {
         permissionCounter--;
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     private void receiveCall() {
         Bundle callInfo = new Bundle();
-        callInfo.putString("from",from);
+        callInfo.putString("from", from);
+        callInfo.putString("fromId", fromId);
+        //callInfo.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle); // https://stackoverflow.com/questions/53868446/using-telecommanager-with-our-custom-protocol
+        //callInfo.putBoolean(PhoneAccount.EXTRA_LOG_SELF_MANAGED_CALLS, false); // 2020-08-03 EXTRA_LOG_SELF_MANAGED_CALLS=false
         tm.addNewIncomingCall(handle, callInfo);
         permissionCounter = 0;
         this.callbackContext.success("Incoming call successful");
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.M)
     private void sendCall() {
         Uri uri = Uri.fromParts("tel", to, null);
         Bundle callInfoBundle = new Bundle();
